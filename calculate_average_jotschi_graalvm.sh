@@ -15,18 +15,11 @@
 #  limitations under the License.
 #
 
-set -euo pipefail
+#bin/jlink --compress=none --add-modules java.base --module-path $JAVA_HOME/jmods --output jbase
+# --no-header-files --no-man-pages
 
-if [ -z "$1" ]; then
-  echo "Usage: test.sh <fork name>"
-  exit 1
-fi
+#JAVA_OPTS="--enable-preview"
+JAVA_OPTS="--enable-preview -XX:+UnlockExperimentalVMOptions -Xms64m -Xmx64m -XX:+HeapDumpOnOutOfMemoryError -XX:+AlwaysPreTouch" 
+#JAVA_OPTS="--enable-preview -XX:+UnlockExperimentalVMOptions -XX:+UseEpsilonGC -Xms6g -Xmx6g -XX:+HeapDumpOnOutOfMemoryError -XX:+AlwaysPreTouch" 
+time /opt/jvm/graalvm-21/bin/java $JAVA_OPTS --class-path target/average-1.0.0-SNAPSHOT.jar dev.morling.onebrc.CalculateAverage_jotschi
 
-for sample in $(ls src/test/resources/samples/*.txt); do
-  echo "Validating calculate_average_$1.sh -- $sample"
-
-  rm -f measurements.txt
-  ln -s $sample measurements.txt
-
-  diff <("./calculate_average_$1.sh") ${sample%.txt}.out
-done

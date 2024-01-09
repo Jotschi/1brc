@@ -16,6 +16,8 @@
 #
 
 
-JAVA_OPTS="--enable-preview"
+#JAVA_OPTS="--enable-preview"
+JAVA_OPTS="--enable-preview -XX:+UnlockExperimentalVMOptions -Xms64m -Xmx64m -XX:+HeapDumpOnOutOfMemoryError -XX:+AlwaysPreTouch" 
+#JAVA_OPTS="--enable-preview -XX:+UnlockExperimentalVMOptions -XX:+UseEpsilonGC -Xms6g -Xmx6g -XX:+HeapDumpOnOutOfMemoryError -XX:+AlwaysPreTouch" 
 time java $JAVA_OPTS --class-path target/average-1.0.0-SNAPSHOT.jar dev.morling.onebrc.CalculateAverage_jotschi
 

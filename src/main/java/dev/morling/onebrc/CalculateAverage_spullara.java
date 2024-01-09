@@ -35,14 +35,11 @@ public class CalculateAverage_spullara {
     /*
      * My results on this computer:
      *
-     * CalculateAverage: 2m37.788s
-     * CalculateAverage_royvanrijn: 0m29.639s
-     * CalculateAverage_spullara: 0m2.013s
+     * CalculateAverage: 2m37.788s CalculateAverage_royvanrijn: 0m29.639s CalculateAverage_spullara: 0m2.013s
      *
      */
 
     public static void main(String[] args) throws IOException, ExecutionException, InterruptedException {
-        long start = System.currentTimeMillis();
         var filename = args.length == 0 ? FILE : args[0];
         var file = new File(filename);
 
@@ -76,7 +73,8 @@ public class CalculateAverage_spullara {
                         currentPosition += 3;
                     }
                     else {
-                        temp = negative * ((bb.get(currentPosition) - '0') * 100 + ((bb.get(currentPosition + 1) - '0') * 10 + (bb.get(currentPosition + 3) - '0')));
+                        temp = negative
+                                * ((bb.get(currentPosition) - '0') * 100 + ((bb.get(currentPosition + 1) - '0') * 10 + (bb.get(currentPosition + 3) - '0')));
                         currentPosition += 4;
                     }
                     if (bb.get(currentPosition) == '\r') {
@@ -113,7 +111,6 @@ public class CalculateAverage_spullara {
                 long segEnd = (i == numberOfSegments - 1) ? fileSize : segStart + segmentSize;
                 segStart = findSegment(i, 0, randomAccessFile, segStart, segEnd);
                 segEnd = findSegment(i, numberOfSegments - 1, randomAccessFile, segEnd, fileSize);
-
                 segments.add(new FileSegment(segStart, segEnd));
             }
         }
@@ -172,41 +169,41 @@ class Result {
     }
 
 class ByteArrayToResultMap {
-    public static final int MAPSIZE = 1024 * 128;
-    Result[] slots = new Result[MAPSIZE];
-    byte[][] keys = new byte[MAPSIZE][];
+  public static final int MAPSIZE = 1024 * 128;
+  Result[] slots = new Result[MAPSIZE];
+  byte[][] keys = new byte[MAPSIZE][];
 
-    public void putOrMerge(byte[] key, int offset, int size, double temp, int hash) {
-        int slot = hash & (slots.length - 1);
-        var slotValue = slots[slot];
-        // Linear probe for open slot
-        while (slotValue != null && (keys[slot].length != size || !Arrays.equals(keys[slot], 0, size, key, offset, size))) {
-            slot = (slot + 1) & (slots.length - 1);
-            slotValue = slots[slot];
-        }
-        Result value = slotValue;
-        if (value == null) {
-            slots[slot] = new Result(temp);
-            byte[] bytes = new byte[size];
-            System.arraycopy(key, offset, bytes, 0, size);
-            keys[slot] = bytes;
-        } else {
-            value.min = Math.min(value.min, temp);
-            value.max = Math.max(value.max, temp);
-            value.sum += temp;
-            value.count += 1;
-        }
+  public void putOrMerge(byte[] key, int offset, int size, double temp, int hash) {
+    int slot = hash & (slots.length - 1);
+    var slotValue = slots[slot];
+    // Linear probe for open slot
+    while (slotValue != null && (keys[slot].length != size || !Arrays.equals(keys[slot], 0, size, key, offset, size))) {
+      slot = (slot + 1) & (slots.length - 1);
+      slotValue = slots[slot];
     }
+    Result value = slotValue;
+    if (value == null) {
+      slots[slot] = new Result(temp);
+      byte[] bytes = new byte[size];
+      System.arraycopy(key, offset, bytes, 0, size);
+      keys[slot] = bytes;
+    } else {
+      value.min = Math.min(value.min, temp);
+      value.max = Math.max(value.max, temp);
+      value.sum += temp;
+      value.count += 1;
+    }
+  }
 
-    // Get all pairs
-    public List<Entry> getAll() {
-        List<Entry> result = new ArrayList<>(slots.length);
-        for (int i = 0; i < slots.length; i++) {
-            Result slotValue = slots[i];
-            if (slotValue != null) {
-                result.add(new Entry(keys[i], slotValue));
-            }
-        }
-        return result;
+  // Get all pairs
+  public List<Entry> getAll() {
+    List<Entry> result = new ArrayList<>(slots.length);
+    for (int i = 0; i < slots.length; i++) {
+      Result slotValue = slots[i];
+      if (slotValue != null) {
+        result.add(new Entry(keys[i], slotValue));
+      }
     }
+    return result;
+  }
 }

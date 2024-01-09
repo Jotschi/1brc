@@ -19,15 +19,19 @@ import java.io.File;
 import java.io.IOException;
 import java.io.RandomAccessFile;
 import java.lang.foreign.Arena;
+import java.lang.foreign.MemoryLayout;
 import java.lang.foreign.MemorySegment;
+import java.lang.foreign.SequenceLayout;
+import java.lang.foreign.StructLayout;
+import java.lang.foreign.ValueLayout;
 import java.lang.foreign.ValueLayout.OfByte;
 import java.lang.foreign.ValueLayout.OfChar;
+import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.List;
-import java.util.TreeMap;
-import java.util.stream.Collectors;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 public class CalculateAverage_jotschi {
     private static final String FILE = "./measurements.txt";
@@ -38,17 +42,18 @@ public class CalculateAverage_jotschi {
     }
 
     @SuppressWarnings("preview")
-    private static void parseFile(String filename) throws IOException {
+    public static String parseFile(String filename) throws IOException {
         var file = new File(filename);
         RandomAccessFile randomAccessFile = new RandomAccessFile(file, "r");
         FileChannel fileChannel = randomAccessFile.getChannel();
         MemorySegment memSeg = fileChannel.map(FileChannel.MapMode.READ_ONLY, 0, fileChannel.size(), Arena.global());
-        var results = getFileSegments(memSeg).stream().map(segment -> {
-            var resultMap = new ByteArrayToResultMap2();
+        var resultMap = new MemorySegmentResult();
+        getFileSegments(memSeg).stream().parallel().forEach(segment -> {
             long segmentEnd = segment.end();
             MemorySegment slice = memSeg.asSlice(segment.start(), segmentEnd - segment.start());
 
             // Up to 100 characters for a city name
+            // TODO use offset+len instead of buffer and reference the slice directly.
             var buffer = new byte[100];
             int startLine;
             int pos = 0;
@@ -58,6 +63,7 @@ public class CalculateAverage_jotschi {
                 byte b;
                 int offset = 0;
                 int hash = 0;
+                // The Practice of Programming (HASH TABLES, pg. 57)
                 while (currentPosition != segmentEnd && (b = slice.get(OfByte.JAVA_BYTE, currentPosition++)) != ';') {
                     buffer[offset++] = b;
                     hash = 31 * hash + b;
@@ -83,13 +89,14 @@ public class CalculateAverage_jotschi {
                     currentPosition++;
                 }
                 currentPosition++;
-                resultMap.putOrMerge(buffer, 0, offset, temp / 10.0, hash);
+                resultMap.put2(buffer, 0, offset, temp / 10.0, hash);
                 pos = currentPosition;
             }
-            return resultMap;
-        }).parallel().flatMap(partition -> partition.getAll().stream())
-                .collect(Collectors.toMap(e -> new String(e.key()), Entry2::value, CalculateAverage_jotschi::merge, TreeMap::new));
-        System.out.println(results);
+        });
+
+        resultMap.print();
+        return null;
+        // return resultMap.toString();
     }
 
     private static List<FileSegment2> getFileSegments(MemorySegment memSeg) throws IOException {
@@ -115,18 +122,6 @@ public class CalculateAverage_jotschi {
             segments.add(new FileSegment2(segStart, segEnd));
         }
         return segments;
-    }
-
-    private static Result2 merge(Result2 v, Result2 value) {
-        return merge(v, value.min, value.max, value.sum, value.count);
-    }
-
-    private static Result2 merge(Result2 v, double value, double value1, double value2, long value3) {
-        v.min = Math.min(v.min, value);
-        v.max = Math.max(v.max, value1);
-        v.sum += value2;
-        v.count += value3;
-        return v;
     }
 
     private static long findSegment(int i, int skipSegment, MemorySegment memSeg, long location, long fileSize) throws IOException {
@@ -164,51 +159,137 @@ class Result2 {
 
 }
 
-    record Pair2(int slot, Result2 slotValue) {
-    }
-
-    record Entry2(byte[] key, Result2 value) {
-    }
-
     record FileSegment2(long start, long end) {
     }
 
-class ByteArrayToResultMap2 {
-  public static final int MAPSIZE = 1024 * 128;
-  Result2[] slots = new Result2[MAPSIZE];
-  byte[][] keys = new byte[MAPSIZE][];
+/**
+ * This class manages a native memory segment which will be used to store the values.
+ */
+class MemorySegmentResult {
+  private static MemorySegment extraSeg;
+  private static Arena arena;
 
-  public void putOrMerge(byte[] key, int offset, int size, double temp, int hash) {
-    int slot = hash & (slots.length - 1);
-    var slotValue = slots[slot];
-    // Linear probe for open slot
-    while (slotValue != null && (keys[slot].length != size || !Arrays.equals(keys[slot], 0, size, key, offset, size))) {
-      slot = (slot + 1) & (slots.length - 1);
-      slotValue = slots[slot];
-    }
-    Result2 value = slotValue;
-    if (value == null) {
-      slots[slot] = new Result2(temp);
-      byte[] bytes = new byte[size];
-      System.arraycopy(key, offset, bytes, 0, size);
-      keys[slot] = bytes;
-    } else {
-      value.min = Math.min(value.min, temp);
-      value.max = Math.max(value.max, temp);
-      value.sum += temp;
-      value.count += 1;
-    }
+  private Map<String, Integer> cityToOffset = new ConcurrentHashMap<>(500);
+  private Map<Integer, Integer> hashToOffset = new ConcurrentHashMap<>(500);
+  private static StructLayout ITEM_LAYOUT = MemoryLayout.structLayout(ValueLayout.JAVA_DOUBLE, ValueLayout.JAVA_DOUBLE, ValueLayout.JAVA_DOUBLE,
+    ValueLayout.JAVA_DOUBLE, ValueLayout.JAVA_INT, ValueLayout.JAVA_INT);
+  private static SequenceLayout SEQUENCE_LAYOUT = MemoryLayout.sequenceLayout(1000, ITEM_LAYOUT);
+
+  static {
+    arena = Arena.ofShared();
+    extraSeg = arena.allocate(SEQUENCE_LAYOUT);
   }
 
-  // Get all pairs
-  public List<Entry2> getAll() {
-    List<Entry2> result = new ArrayList<>(slots.length);
-    for (int i = 0; i < slots.length; i++) {
-      Result2 slotValue = slots[i];
-      if (slotValue != null) {
-        result.add(new Entry2(keys[i], slotValue));
+  public String valuesToString(double min, double sum, int count, double max) {
+    return round(min) + "/" + round(sum / count) + "/" + round(max);
+  }
+
+  double round(double v) {
+    return Math.round(v * 10.0) / 10.0;
+  }
+
+  // public String values(int offset) {
+  // ByteBuffer buffer = extraSeg.asByteBuffer();
+  // buffer.position(offset);
+  // double min = buffer.getDouble();
+  // double max = buffer.getDouble();
+  // double sum = buffer.getDouble();
+  // int count = buffer.getInt();
+  // return valuesToString(min, sum, count, max);
+  // }
+
+  public String values(int offset) {
+    MemorySegment slice = extraSeg.asSlice(offset, ITEM_LAYOUT);
+    double min = slice.get(ValueLayout.JAVA_DOUBLE, 0);
+    double max = slice.get(ValueLayout.JAVA_DOUBLE, 8);
+    double sum = slice.get(ValueLayout.JAVA_DOUBLE, 16);
+    int count = slice.get(ValueLayout.JAVA_INT, 24);
+    return valuesToString(min, sum, count, max);
+  }
+
+  @Override
+  public String toString() {
+    StringBuilder builder = new StringBuilder();
+    builder.append("{");
+    String[] sortedKey = cityToOffset.keySet().stream().sorted().toArray(size -> new String[size]);
+    for (int i = 0; i < sortedKey.length; i++) {
+      String key = sortedKey[i];
+      int offset = cityToOffset.get(key);
+      builder.append(key + "=" + values(offset));
+      if (i != sortedKey.length - 1) {
+        builder.append(", ");
       }
     }
-    return result;
+    builder.append("}\n");
+    return builder.toString();
   }
+
+  public void print() {
+    System.out.print("{");
+    String[] sortedKey = cityToOffset.keySet().stream().sorted().toArray(size -> new String[size]);
+    for (int i = 0; i < sortedKey.length; i++) {
+      String key = sortedKey[i];
+      int offset = cityToOffset.get(key);
+      System.out.print(key + "=" + values(offset));
+      if (i != sortedKey.length - 1) {
+        System.out.print(", ");
+      }
+    }
+    System.out.println("}");
+  }
+
+  int currentOffset = 0;
+
+  public void put2(byte[] bytes, int offset, int size, double temp, int hash) {
+    ByteBuffer buffer = extraSeg.asByteBuffer();
+    // char t = (char) hash;
+    // int keyOffset = (int) t;
+
+    double min = temp;
+    double max = temp;
+    double sum = 0;
+    int count = 0;
+    int keyOffset = 0;
+
+    // Entry not yet encountered so lets get a new offset and add it
+    if (!hashToOffset.containsKey(hash)) {
+      byte[] keyBytes = new byte[size];
+      System.arraycopy(bytes, offset, keyBytes, 0, size);
+      currentOffset += 32;
+      keyOffset = currentOffset;
+      String keyStr = new String(keyBytes);
+      // System.out.println("Offset: " + currentOffset + ", name:" + keyStr + ", HASH: " + hash);
+      cityToOffset.put(keyStr, currentOffset);
+      hashToOffset.put(hash, currentOffset);
+    } else {
+      keyOffset = hashToOffset.get(hash);
+      buffer.position(keyOffset);
+      min = buffer.getDouble();
+      max = buffer.getDouble();
+      sum = buffer.getDouble();
+      count = buffer.getInt();
+    }
+
+    // Update min, max, sum and count
+    min = Math.min(min, temp);
+    max = Math.max(max, temp);
+    sum += temp;
+    count++;
+
+    buffer.position(keyOffset);
+    buffer.putDouble(min);
+    buffer.putDouble(max);
+    buffer.putDouble(sum);
+    buffer.putInt(count);
+    // if (!hashToOffset.containsKey(hash)) {
+    // byte[] keyBytes = new byte[size];
+    // System.arraycopy(bytes, offset, keyBytes, 0, size);
+    // String keyStr = new String(keyBytes);
+    // buffer.putInt(keyBytes.length);
+    // buffer.put(keyBytes);
+    // }
+
+    // TODO add str len + str
+  }
+
 }
